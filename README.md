@@ -52,8 +52,7 @@ This repository is a **Blockchain Crowdfunding dApp** built with:
 
 ---
 
-## Recommended GitHub README blurb
+
 
 > A simple decentralized crowdfunding app that deploys a Solidity campaign contract using Hardhat, then connects a browser UI to the contract for creating campaigns and sending donations. Includes wallet connect support, campaign progress tracking, and local deployment utilities.
 
-If you want, I can also generate a full README.md draft for your repository.
