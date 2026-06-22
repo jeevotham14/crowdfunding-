@@ -1,0 +1,869 @@
+﻿<!DOCTYPE html>
+<html>
+<head>
+    <title>Crowdfunding</title>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@400;500;700&display=swap" rel="stylesheet">
+    <link rel="stylesheet" href="styles.css">
+    <script src="https://cdn.jsdelivr.net/npm/web3@latest/dist/web3.min.js"></script>
+    <script src="contract-config.js"></script>
+</head>
+<body>
+    <div class="page-shell">
+        <header class="hero">
+            <p class="eyebrow">Decentralized Funding Portal</p>
+            <h1>Blockchain Crowdfunding</h1>
+            <p class="hero-copy">
+                Launch campaigns, support projects, and track funding progress from one clean dashboard.
+            </p>
+            <div class="hero-actions">
+                <button class="primary-button connect-button" onclick="connect()">Connect Wallet</button>
+                <button class="secondary-button connect-button" onclick="addHardhatNetwork()">Add Hardhat Local</button>
+                <button class="secondary-button connect-button" onclick="disconnectWallet()">Disconnect</button>
+            </div>
+        </header>
+
+        <main class="dashboard">
+            <section class="panel">
+                <h2>Create Campaign</h2>
+                <p class="section-copy">Set a funding goal and publish a new campaign to the blockchain.</p>
+                <div class="form-grid create-campaign-row">
+                    <input id="goal" placeholder="Enter goal amount">
+                    <input id="durationMonths" placeholder="Duration in months">
+                    <button id="createCampaignButton" class="primary-button" onclick="createCampaign()">Create</button>
+                </div>
+            </section>
+
+            <section class="panel">
+                <h2>Donate</h2>
+                <p class="section-copy">Choose a campaign ID and send your contribution instantly.</p>
+                <div class="form-grid">
+                    <input id="campaignId" placeholder="Campaign ID">
+                    <input id="amount" placeholder="Amount in wei">
+                </div>
+                <div class="action-row">
+                    <button class="secondary-button" onclick="loadCampaign()">Load Campaign</button>
+                    <button id="donateButton" class="primary-button" onclick="donate()">Donate</button>
+                </div>
+                <div class="campaign-card">
+                    <p class="campaign-label">Campaign Snapshot</p>
+                    <p id="campaignSummary" class="campaign-summary">Load a campaign to preview its creator, goal, and current progress.</p>
+                    <div class="progress-meta">
+                        <span id="campaignPercent">0%</span>
+                        <span id="campaignState">Not loaded</span>
+                    </div>
+                    <div class="progress-track" aria-hidden="true">
+                        <div id="campaignProgress" class="progress-fill"></div>
+                    </div>
+                </div>
+            </section>
+
+            <section class="panel status-panel">
+                <h2>Status</h2>
+                <p id="status" class="status-text">Not connected</p>
+                <p id="details" class="details-text">Connect your wallet to begin interacting with campaigns.</p>
+                <div class="address-stack">
+                    <div class="address-card">
+                        <div class="address-meta">
+                            <p class="campaign-label">Connected Wallet</p>
+                            <p id="walletAddressValue" class="address-value">Not connected</p>
+                        </div>
+                        <button id="copyWalletButton" class="copy-button" onclick="copyAddress('wallet')" disabled>Copy</button>
+                    </div>
+                    <div class="address-card">
+                        <div class="address-meta">
+                            <p class="campaign-label">Contract Address</p>
+                            <p id="contractAddressValue" class="address-value">Not connected</p>
+                        </div>
+                        <button id="copyContractButton" class="copy-button" onclick="copyAddress('contract')" disabled>Copy</button>
+                    </div>
+                </div>
+                <div class="stat-card">
+                    <p class="campaign-label">Latest Count</p>
+                    <p id="campaignCountValue" class="stat-value">--</p>
+                    <p class="stat-copy">Total campaigns currently stored in the contract.</p>
+                </div>
+                <div class="stat-card">
+                    <div class="stat-card-header">
+                        <p class="campaign-label">Recent Campaigns</p>
+                        <button id="myCampaignsButton" class="filter-button" onclick="toggleMyCampaignsFilter()" disabled>My campaigns: Off</button>
+                    </div>
+                    <div id="recentCampaigns" class="recent-campaigns">
+                        <p class="empty-list">Connect your wallet to load the latest campaigns.</p>
+                    </div>
+                </div>
+                <div class="stat-card">
+                    <div class="stat-card-header">
+                        <p class="campaign-label">All Campaign IDs</p>
+                        <p id="allCampaignsMeta" class="stat-copy">Every campaign on the current contract.</p>
+                    </div>
+                    <div id="allCampaignsList" class="all-campaigns-list">
+                        <p class="empty-list">Connect your wallet to view all campaign IDs.</p>
+                    </div>
+                </div>
+            </section>
+        </main>
+    </div>
+    <div id="toastStack" class="toast-stack" aria-live="polite" aria-atomic="true"></div>
+
+<script>
+let web3;
+let contract;
+let campaignLoadTimer;
+let campaignRefreshTimer;
+let connectedAccount = "";
+let showMyCampaignsOnly = false;
+const supportedLocalChainIds = ["0x7a69", "0x539"];
+
+function escapeHtml(value) {
+    return String(value)
+        .replace(/&/g, "&amp;")
+        .replace(/</g, "&lt;")
+        .replace(/>/g, "&gt;")
+        .replace(/"/g, "&quot;")
+        .replace(/'/g, "&#39;");
+}
+
+function parseWholeNumber(value) {
+    return /^\d+$/.test(value.trim());
+}
+
+function shortenAddress(address) {
+    if (!address || address.length < 10) {
+        return address || "";
+    }
+
+    return address.slice(0, 6) + "..." + address.slice(-4);
+}
+
+function getReadableError(err) {
+    const message =
+        err?.reason ||
+        err?.data?.message ||
+        err?.error?.message ||
+        err?.message ||
+        String(err || "Unknown error");
+
+    if (message.includes("User denied") || message.includes("rejected")) {
+        return "Transaction was rejected in MetaMask.";
+    }
+
+    if (message.includes("insufficient funds")) {
+        return "The connected wallet does not have enough ETH for gas on this network.";
+    }
+
+    if (message.includes("Goal must be greater than 0")) {
+        return "Goal must be greater than 0.";
+    }
+
+    if (message.includes("Duration must be greater than 0")) {
+        return "Duration must be greater than 0 months.";
+    }
+
+    if (message.includes("Campaign deadline passed")) {
+        return "This campaign deadline has passed.";
+    }
+
+    if (message.includes("Invalid campaign")) {
+        return "That campaign ID does not exist on this contract.";
+    }
+
+    if (message.includes("Campaign already completed")) {
+        return "This campaign is already completed.";
+    }
+
+    if (message.includes("Exceeds goal")) {
+        return "Donation exceeds the remaining campaign goal.";
+    }
+
+    return message;
+}
+
+function getCampaignCompleted(campaign) {
+    return campaign.completed ?? campaign[5] ?? campaign[3];
+}
+
+function getCampaignDurationMonths(campaign) {
+    return campaign.durationMonths || campaign[3] || "0";
+}
+
+function getCampaignDeadline(campaign) {
+    return campaign.deadline || campaign[4] || "0";
+}
+
+function formatDeadline(deadlineValue) {
+    const deadline = Number(deadlineValue || 0);
+
+    if (!deadline) {
+        return "No deadline";
+    }
+
+    return new Date(deadline * 1000).toLocaleDateString(undefined, {
+        year: "numeric",
+        month: "short",
+        day: "numeric"
+    });
+}
+
+function setButtonLoading(buttonId, isLoading, loadingLabel) {
+    const button = document.getElementById(buttonId);
+
+    if (!button) {
+        return;
+    }
+
+    if (isLoading) {
+        if (!button.dataset.label) {
+            button.dataset.label = button.innerHTML;
+        }
+
+        button.disabled = true;
+        button.classList.add("is-loading");
+        button.innerHTML =
+            '<span class="button-spinner" aria-hidden="true"></span>' +
+            '<span>' + escapeHtml(loadingLabel || "Processing...") + '</span>';
+        return;
+    }
+
+    button.disabled = false;
+    button.classList.remove("is-loading");
+    button.innerHTML = button.dataset.label || button.textContent;
+}
+
+function updateCopyButtons() {
+    const walletText = connectedAccount || "";
+    const contractText = contractConfig.address || "";
+    const walletButton = document.getElementById("copyWalletButton");
+    const contractButton = document.getElementById("copyContractButton");
+
+    document.getElementById("walletAddressValue").innerText = walletText || "Not connected";
+    document.getElementById("contractAddressValue").innerText = contractText || "Not connected";
+    walletButton.disabled = !walletText;
+    contractButton.disabled = !contractText;
+}
+
+function updateMyCampaignsButton() {
+    const button = document.getElementById("myCampaignsButton");
+    const enabled = Boolean(contract && connectedAccount);
+
+    button.disabled = !enabled;
+    button.innerText = "My campaigns: " + (showMyCampaignsOnly ? "On" : "Off");
+}
+
+async function copyAddress(type) {
+    const value = type === "wallet" ? connectedAccount : contractConfig.address;
+
+    if (!value) {
+        showToast("Nothing to copy yet.", "error");
+        return;
+    }
+
+    try {
+        await navigator.clipboard.writeText(value);
+        showToast((type === "wallet" ? "Wallet" : "Contract") + " address copied.", "success");
+    } catch (err) {
+        console.log("ERROR:", err);
+        showToast("Clipboard access was blocked.", "error");
+    }
+}
+
+function toggleMyCampaignsFilter() {
+    if (!contract || !connectedAccount) {
+        return;
+    }
+
+    showMyCampaignsOnly = !showMyCampaignsOnly;
+    updateMyCampaignsButton();
+    refreshCampaignCount().catch((err) => {
+        console.log("ERROR:", err);
+    });
+}
+
+async function ensureContractReady() {
+    if (!window.ethereum || !web3) {
+        return { ok: false, message: "Connect your wallet first." };
+    }
+
+    const rawChainId = await window.ethereum.request({ method: "eth_chainId" });
+    const chainId = String(rawChainId || "").toLowerCase();
+
+    if (!supportedLocalChainIds.includes(chainId)) {
+        return {
+            ok: false,
+            message: "Switch MetaMask to Hardhat Local first. Detected chain ID: " + (rawChainId || "unknown")
+        };
+    }
+
+    const code = await web3.eth.getCode(contractConfig.address);
+
+    if (!code || code === "0x") {
+        return {
+            ok: false,
+            message: "No contract found at this address on Hardhat Local. Start the node and run npm run deploy:lts again."
+        };
+    }
+
+    return { ok: true };
+}
+
+function resetCampaignSnapshot() {
+    document.getElementById("campaignSummary").innerText =
+        "Load a campaign to preview its creator, goal, and current progress.";
+    document.getElementById("campaignPercent").innerText = "0% funded";
+    document.getElementById("campaignState").innerText = "Not loaded";
+    document.getElementById("campaignProgress").style.width = "0%";
+}
+
+function resetRecentCampaigns() {
+    document.getElementById("recentCampaigns").innerHTML =
+        '<p class="empty-list">Connect your wallet to load the latest campaigns.</p>';
+}
+
+function resetAllCampaignsList() {
+    document.getElementById("allCampaignsMeta").innerText = "Every campaign on the current contract.";
+    document.getElementById("allCampaignsList").innerHTML =
+        '<p class="empty-list">Connect your wallet to view all campaign IDs.</p>';
+}
+
+async function refreshCampaignCount() {
+    if (!contract) {
+        return;
+    }
+
+    const count = await contract.methods.campaignCount().call();
+    document.getElementById("campaignCountValue").innerText = count;
+    await refreshRecentCampaigns(Number(count));
+    await refreshAllCampaigns(Number(count));
+}
+
+async function refreshRecentCampaigns(count) {
+    if (!contract) {
+        return;
+    }
+
+    const recentCampaigns = document.getElementById("recentCampaigns");
+
+    if (!count) {
+        recentCampaigns.innerHTML =
+            '<p class="empty-list">No campaigns yet. Create the first one from the panel on the left.</p>';
+        return;
+    }
+
+    const items = [];
+    const maxItems = 3;
+
+    for (let id = count; id >= 1 && items.length < maxItems; id -= 1) {
+        const campaign = await contract.methods.getCampaign(String(id)).call();
+        const creatorAddress = campaign.creator || campaign[0];
+        const creator = shortenAddress(creatorAddress);
+        const goal = campaign.goal || campaign[1];
+        const fundsRaised = campaign.fundsRaised || campaign[2];
+        const completed = getCampaignCompleted(campaign);
+        const deadline = getCampaignDeadline(campaign);
+
+        if (
+            showMyCampaignsOnly &&
+            creatorAddress &&
+            creatorAddress.toLowerCase() !== connectedAccount.toLowerCase()
+        ) {
+            continue;
+        }
+
+        items.push(
+            '<button class="recent-item" onclick="selectCampaign(' + id + ')">' +
+            '<span class="recent-title">Campaign #' + id + '</span>' +
+            '<span class="recent-copy">' + creator + ' | ' + fundsRaised + ' / ' + goal + ' | Ends ' + formatDeadline(deadline) + '</span>' +
+            '<span class="recent-state">' + (completed ? 'Completed' : 'Open') + '</span>' +
+            '</button>'
+        );
+    }
+
+    if (!items.length) {
+        recentCampaigns.innerHTML = showMyCampaignsOnly
+            ? '<p class="empty-list">No campaigns from this wallet yet. Create one to see it here.</p>'
+            : '<p class="empty-list">No campaigns yet. Create the first one from the panel on the left.</p>';
+        return;
+    }
+
+    recentCampaigns.innerHTML = items.join("");
+}
+
+async function refreshAllCampaigns(count) {
+    if (!contract) {
+        return;
+    }
+
+    const allCampaignsList = document.getElementById("allCampaignsList");
+    const allCampaignsMeta = document.getElementById("allCampaignsMeta");
+
+    if (!count) {
+        allCampaignsMeta.innerText = "0 campaigns on the current contract.";
+        allCampaignsList.innerHTML =
+            '<p class="empty-list">No campaigns created yet.</p>';
+        return;
+    }
+
+    const items = [];
+
+    for (let id = 1; id <= count; id += 1) {
+        const campaign = await contract.methods.getCampaign(String(id)).call();
+        const creatorAddress = campaign.creator || campaign[0];
+        const goal = campaign.goal || campaign[1];
+        const fundsRaised = campaign.fundsRaised || campaign[2];
+        const completed = getCampaignCompleted(campaign);
+        const deadline = getCampaignDeadline(campaign);
+
+        items.push(
+            '<button class="all-campaign-item" onclick="selectCampaign(' + id + ')">' +
+            '<span class="recent-title">Campaign #' + id + '</span>' +
+            '<span class="recent-copy">' + shortenAddress(creatorAddress) + ' | ' + fundsRaised + ' / ' + goal + ' | Ends ' + formatDeadline(deadline) + '</span>' +
+            '<span class="recent-state">' + (completed ? 'Completed' : 'Open') + '</span>' +
+            '</button>'
+        );
+    }
+
+    allCampaignsMeta.innerText = count + " campaign" + (count === 1 ? "" : "s") + " on the current contract.";
+    allCampaignsList.innerHTML = items.join("");
+}
+
+function selectCampaign(id) {
+    document.getElementById("campaignId").value = String(id);
+    loadCampaign().catch((err) => {
+        console.log("ERROR:", err);
+    });
+}
+
+function startCampaignRefresh() {
+    clearInterval(campaignRefreshTimer);
+
+    campaignRefreshTimer = setInterval(() => {
+        const id = document.getElementById("campaignId").value.trim();
+
+        if (!contract || !id || !parseWholeNumber(id)) {
+            return;
+        }
+
+        loadCampaignById(id, false).catch((err) => {
+            console.log("ERROR:", err);
+        });
+    }, 8000);
+}
+
+function showToast(message, type) {
+    const toastStack = document.getElementById("toastStack");
+    const toast = document.createElement("div");
+
+    toast.className = "toast toast-" + (type || "info");
+    toast.innerText = message;
+    toastStack.appendChild(toast);
+
+    requestAnimationFrame(() => {
+        toast.classList.add("toast-visible");
+    });
+
+    setTimeout(() => {
+        toast.classList.remove("toast-visible");
+        setTimeout(() => {
+            toast.remove();
+        }, 250);
+    }, 2800);
+}
+
+function setCampaignProgress(raisedValue, goalValue, completed) {
+    const raised = Number(raisedValue);
+    const goal = Number(goalValue);
+    const percent = goal > 0 ? Math.min((raised / goal) * 100, 100) : 0;
+
+    document.getElementById("campaignPercent").innerText = percent.toFixed(0) + "% funded";
+    document.getElementById("campaignState").innerText = completed ? "Completed" : "Open";
+    document.getElementById("campaignProgress").style.width = percent + "%";
+}
+
+function updateCampaignSummary(campaignId, campaign) {
+    const creator = campaign.creator || campaign[0];
+    const goal = campaign.goal || campaign[1];
+    const fundsRaised = campaign.fundsRaised || campaign[2];
+    const durationMonths = getCampaignDurationMonths(campaign);
+    const deadline = getCampaignDeadline(campaign);
+    const completed = getCampaignCompleted(campaign);
+
+    document.getElementById("campaignSummary").innerText =
+        "Campaign #" + campaignId +
+        " | Creator: " + shortenAddress(creator) +
+        " | Raised: " + fundsRaised +
+        " / Goal: " + goal +
+        " | Duration: " + durationMonths + " month" + (String(durationMonths) === "1" ? "" : "s") +
+        " | Deadline: " + formatDeadline(deadline) +
+        " | Completed: " + (completed ? "Yes" : "No");
+
+    setCampaignProgress(fundsRaised, goal, completed);
+}
+
+async function loadCampaignById(id, notify = true) {
+    if (!contract) {
+        document.getElementById("status").innerText = "Connect wallet first";
+        document.getElementById("details").innerText = "A wallet connection is required before loading campaign data.";
+        if (notify) {
+            showToast("Connect your wallet before loading a campaign.", "error");
+        }
+        return;
+    }
+
+    document.getElementById("status").innerText = "Loading campaign...";
+    const campaign = await contract.methods.getCampaign(id).call();
+
+    updateCampaignSummary(id, campaign);
+    document.getElementById("status").innerText = "Campaign loaded";
+    document.getElementById("details").innerText = "Campaign data fetched from the contract.";
+    await refreshCampaignCount();
+
+    if (notify) {
+        showToast("Campaign #" + id + " loaded.", "info");
+    }
+}
+
+function queueCampaignLoad() {
+    const id = document.getElementById("campaignId").value.trim();
+
+    clearTimeout(campaignLoadTimer);
+
+    if (!id) {
+        resetCampaignSnapshot();
+        return;
+    }
+
+    if (!parseWholeNumber(id)) {
+        resetCampaignSnapshot();
+        return;
+    }
+
+    if (!contract) {
+        return;
+    }
+
+    campaignLoadTimer = setTimeout(() => {
+        loadCampaign().catch((err) => {
+            console.log("ERROR:", err);
+        });
+    }, 450);
+}
+
+async function loadCampaign() {
+    try {
+        const id = document.getElementById("campaignId").value.trim();
+
+        if (!id) {
+            document.getElementById("status").innerText = "Enter a campaign ID";
+            document.getElementById("details").innerText = "Add a campaign ID first, then load its details.";
+            showToast("Enter a campaign ID first.", "error");
+            return;
+        }
+
+        if (!parseWholeNumber(id)) {
+            document.getElementById("status").innerText = "Campaign ID must be a whole number";
+            document.getElementById("details").innerText = "Use numeric IDs like 1, 2, or 3 when loading campaigns.";
+            showToast("Campaign ID must be numeric.", "error");
+            return;
+        }
+
+        await loadCampaignById(id);
+    } catch (err) {
+        console.log("ERROR:", err);
+        document.getElementById("status").innerText = "Unable to load campaign";
+        document.getElementById("details").innerText = "Check the campaign ID and wallet connection, then try again.";
+        showToast("Could not load that campaign.", "error");
+    }
+}
+
+async function connect() {
+    if (window.ethereum) {
+        web3 = new Web3(window.ethereum);
+        const accounts = await window.ethereum.request({
+            method: 'eth_requestAccounts'
+        });
+        connectedAccount = accounts[0];
+        contract = new web3.eth.Contract(contractConfig.abi, contractConfig.address);
+
+        document.getElementById("status").innerText = "Wallet connected";
+        document.getElementById("details").innerText =
+            "Connected account: " + shortenAddress(accounts[0]) + " | Contract: " + shortenAddress(contractConfig.address);
+        updateCopyButtons();
+        updateMyCampaignsButton();
+        showToast("Wallet connected.", "success");
+        const contractStatus = await ensureContractReady();
+
+        if (!contractStatus.ok) {
+            document.getElementById("status").innerText = "Contract not ready";
+            document.getElementById("details").innerText = contractStatus.message;
+            showToast(contractStatus.message, "error");
+            return;
+        }
+
+        await refreshCampaignCount();
+        startCampaignRefresh();
+
+        if (document.getElementById("campaignId").value.trim()) {
+            loadCampaign().catch((err) => {
+                console.log("ERROR:", err);
+            });
+        }
+    }
+}
+
+async function addHardhatNetwork() {
+    if (!window.ethereum) {
+        document.getElementById("status").innerText = "MetaMask not detected";
+        document.getElementById("details").innerText = "Install or unlock MetaMask to add the local Hardhat network.";
+        showToast("MetaMask is required to add the network.", "error");
+        return;
+    }
+
+    const hardhatNetwork = {
+        chainId: "0x7A69",
+        chainName: "Hardhat Local",
+        nativeCurrency: {
+            name: "Ether",
+            symbol: "ETH",
+            decimals: 18
+        },
+        rpcUrls: ["http://127.0.0.1:8545"]
+    };
+
+    try {
+        await window.ethereum.request({
+            method: "wallet_switchEthereumChain",
+            params: [{ chainId: hardhatNetwork.chainId }]
+        });
+
+        document.getElementById("status").innerText = "Hardhat Local ready";
+        document.getElementById("details").innerText = "MetaMask is now switched to the local Hardhat network.";
+        showToast("Switched to Hardhat Local.", "success");
+    } catch (switchError) {
+        if ((switchError && switchError.code === 4902) || String(switchError && switchError.message).includes("4902")) {
+            try {
+                await window.ethereum.request({
+                    method: "wallet_addEthereumChain",
+                    params: [hardhatNetwork]
+                });
+
+                document.getElementById("status").innerText = "Hardhat Local added";
+                document.getElementById("details").innerText = "The local Hardhat network was added to MetaMask. You can connect now.";
+                showToast("Hardhat Local added to MetaMask.", "success");
+                return;
+            } catch (addError) {
+                console.log("ERROR:", addError);
+                document.getElementById("status").innerText = "Unable to add network";
+                document.getElementById("details").innerText = "Make sure MetaMask is unlocked and your Hardhat node is running on http://127.0.0.1:8545.";
+                showToast("Could not add Hardhat Local.", "error");
+                return;
+            }
+        }
+
+        try {
+            await window.ethereum.request({
+                method: "wallet_switchEthereumChain",
+                params: [{ chainId: "0x539" }]
+            });
+
+            document.getElementById("status").innerText = "Local network ready";
+            document.getElementById("details").innerText = "MetaMask is switched to a supported local chain.";
+            showToast("Switched to local network.", "success");
+        } catch (fallbackError) {
+            console.log("ERROR:", fallbackError);
+            document.getElementById("status").innerText = "Unable to switch network";
+            document.getElementById("details").innerText = "Open MetaMask and switch to a local chain with ID 31337 or 1337.";
+            showToast("Could not switch to a supported local network.", "error");
+        }
+    }
+}
+
+function disconnectWallet() {
+    clearTimeout(campaignLoadTimer);
+    clearInterval(campaignRefreshTimer);
+
+    web3 = undefined;
+    contract = undefined;
+    connectedAccount = "";
+    showMyCampaignsOnly = false;
+
+    document.getElementById("goal").value = "";
+    document.getElementById("durationMonths").value = "";
+    document.getElementById("campaignId").value = "";
+    document.getElementById("amount").value = "";
+    document.getElementById("status").innerText = "Disconnected";
+    document.getElementById("details").innerText = "Wallet session cleared from the page. Reconnect to interact again.";
+    document.getElementById("campaignCountValue").innerText = "--";
+    resetCampaignSnapshot();
+    resetRecentCampaigns();
+    resetAllCampaignsList();
+    updateCopyButtons();
+    updateMyCampaignsButton();
+    showToast("Frontend session disconnected.", "info");
+}
+
+async function createCampaign() {
+    try {
+        if (!contract) {
+            document.getElementById("status").innerText = "Connect wallet first";
+            document.getElementById("details").innerText = "A wallet connection is required before creating a campaign.";
+            showToast("Connect your wallet before creating a campaign.", "error");
+            return;
+        }
+
+        const contractStatus = await ensureContractReady();
+
+        if (!contractStatus.ok) {
+            document.getElementById("status").innerText = "Contract not ready";
+            document.getElementById("details").innerText = contractStatus.message;
+            showToast(contractStatus.message, "error");
+            return;
+        }
+
+        const accounts = await web3.eth.getAccounts();
+        const goal = document.getElementById("goal").value.trim();
+        const durationMonths = document.getElementById("durationMonths").value.trim();
+
+        if (!goal) {
+            document.getElementById("status").innerText = "Enter a goal amount";
+            document.getElementById("details").innerText = "Provide a goal in wei before creating a campaign.";
+            showToast("Enter a goal amount first.", "error");
+            return;
+        }
+
+        if (!durationMonths) {
+            document.getElementById("status").innerText = "Enter duration";
+            document.getElementById("details").innerText = "Provide the campaign time limit in months.";
+            showToast("Enter a campaign duration first.", "error");
+            return;
+        }
+
+        if (!parseWholeNumber(goal) || Number(goal) <= 0) {
+            document.getElementById("status").innerText = "Goal must be a positive whole number";
+            document.getElementById("details").innerText = "Use a positive wei amount like 1000000000000000.";
+            showToast("Goal must be a positive whole number.", "error");
+            return;
+        }
+
+        if (!parseWholeNumber(durationMonths) || Number(durationMonths) <= 0) {
+            document.getElementById("status").innerText = "Duration must be a positive whole number";
+            document.getElementById("details").innerText = "Use a positive number of months like 1, 3, or 6.";
+            showToast("Duration must be a positive whole number.", "error");
+            return;
+        }
+
+        document.getElementById("status").innerText = "Submitting campaign...";
+        document.getElementById("details").innerText = "Confirm the create transaction in your wallet.";
+        setButtonLoading("createCampaignButton", true, "Creating...");
+
+        await contract.methods.createCampaign(goal, durationMonths)
+            .send({ from: accounts[0] });
+
+        document.getElementById("status").innerText = "Campaign created";
+        document.getElementById("details").innerText = "Funding goal submitted successfully.";
+        await refreshCampaignCount();
+        showToast("Campaign created successfully.", "success");
+    } catch (err) {
+        console.log("ERROR:", err);
+        const errorMessage = getReadableError(err);
+        document.getElementById("status").innerText = "Campaign creation failed";
+        document.getElementById("details").innerText = errorMessage;
+        showToast(errorMessage, "error");
+    } finally {
+        setButtonLoading("createCampaignButton", false);
+    }
+}
+
+async function donate() {
+    try {
+        if (!contract) {
+            document.getElementById("status").innerText = "Connect wallet first";
+            document.getElementById("details").innerText = "A wallet connection is required before donating.";
+            showToast("Connect your wallet before donating.", "error");
+            return;
+        }
+
+        const contractStatus = await ensureContractReady();
+
+        if (!contractStatus.ok) {
+            document.getElementById("status").innerText = "Contract not ready";
+            document.getElementById("details").innerText = contractStatus.message;
+            showToast(contractStatus.message, "error");
+            return;
+        }
+
+        document.getElementById("status").innerText = "Processing transaction...";
+        document.getElementById("details").innerText = "Confirm the donation in your wallet.";
+
+        const accounts = await web3.eth.getAccounts();
+        const id = document.getElementById("campaignId").value.trim();
+        const amount = document.getElementById("amount").value.trim();
+
+        if (!id || !amount) {
+            document.getElementById("status").innerText = "Enter campaign ID and amount";
+            document.getElementById("details").innerText = "Both the campaign ID and donation amount are required.";
+            showToast("Enter both campaign ID and donation amount.", "error");
+            return;
+        }
+
+        if (!parseWholeNumber(id)) {
+            document.getElementById("status").innerText = "Campaign ID must be numeric";
+            document.getElementById("details").innerText = "Use a whole number campaign ID before donating.";
+            showToast("Campaign ID must be numeric.", "error");
+            return;
+        }
+
+        if (!parseWholeNumber(amount) || Number(amount) <= 0) {
+            document.getElementById("status").innerText = "Amount must be a positive whole number";
+            document.getElementById("details").innerText = "Use a positive wei value like 1000000000000000.";
+            showToast("Donation amount must be a positive whole number.", "error");
+            return;
+        }
+
+        console.log("Donating to ID:", id);
+        setButtonLoading("donateButton", true, "Donating...");
+
+        await contract.methods.contribute(id)
+            .send({ from: accounts[0], value: amount });
+
+        const campaign = await contract.methods.getCampaign(id).call();
+        const goal = campaign.goal || campaign[1];
+        const raised = campaign.fundsRaised || campaign[2];
+        const deadline = getCampaignDeadline(campaign);
+
+        console.log("Goal:", goal, "Raised:", raised);
+
+        if (parseInt(raised) < parseInt(goal)) {
+            document.getElementById("status").innerText = "Campaign ongoing";
+        }
+        else {
+            document.getElementById("status").innerText = "Goal reached and funds sent";
+        }
+
+        updateCampaignSummary(id, campaign);
+        await refreshCampaignCount();
+        document.getElementById("details").innerText =
+            "Raised: " + raised + " | Goal: " + goal + " | Deadline: " + formatDeadline(deadline);
+        showToast("Donation sent successfully.", "success");
+
+    } catch (err) {
+        console.log("ERROR:", err);
+        const errorMessage = getReadableError(err);
+        document.getElementById("status").innerText = "Transaction failed";
+        document.getElementById("details").innerText = errorMessage;
+        showToast(errorMessage, "error");
+    } finally {
+        setButtonLoading("donateButton", false);
+    }
+}
+</script>
+<script>
+updateCopyButtons();
+updateMyCampaignsButton();
+resetAllCampaignsList();
+document.getElementById("campaignId").addEventListener("input", queueCampaignLoad);
+</script>
+</body>
+</html>

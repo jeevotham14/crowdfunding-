@@ -1,0 +1,26 @@
+{
+  "name": "blockchain",
+  "version": "1.0.0",
+  "description": "",
+  "main": "index.js",
+  "scripts": {
+    "serve": "node scripts/serve.js",
+    "compile": "hardhat compile",
+    "compile:lts": "tools\\node-v24.15.0-win-x64\\node.exe .\\node_modules\\hardhat\\dist\\src\\cli.js compile",
+    "clean": "hardhat clean",
+    "test": "hardhat test",
+    "test:lts": "tools\\node-v24.15.0-win-x64\\node.exe .\\node_modules\\hardhat\\dist\\src\\cli.js test",
+    "deploy": "hardhat run scripts/deploy.js --network localhost",
+    "deploy:lts": "tools\\node-v24.15.0-win-x64\\node.exe .\\node_modules\\hardhat\\dist\\src\\cli.js run scripts/deploy.js --network localhost",
+    "deploy:sepolia": "hardhat run scripts/deploy.js --network sepolia",
+    "deploy:sepolia:lts": "tools\\node-v24.15.0-win-x64\\node.exe .\\node_modules\\hardhat\\dist\\src\\cli.js run scripts/deploy.js --network sepolia"
+  },
+  "keywords": [],
+  "author": "",
+  "license": "ISC",
+  "type": "module",
+  "devDependencies": {
+    "@nomicfoundation/hardhat-toolbox-viem": "^5.0.4",
+    "hardhat": "^3.4.0"
+  }
+}
